@@ -1,2 +1,8 @@
-(title "take the garbage out"
- complete no)
+(:title "take the garbage out"
+ :create-date 10289
+ :due-date 231
+ :complete no)
+(:title "do the laundry"
+ :complete yes
+ :subtasks ((:title "subtask 1"
+             :complete yes)))
