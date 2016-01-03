@@ -9,9 +9,9 @@
     "A todo manager for emacs"
     (define-key οεδ-mode-map "n" 'οεδ-next-line)
     (define-key οεδ-mode-map "p" 'οεδ-prev-line)
+    (define-key οεδ-mode-map (kbd "u") 'οεδ-mark-todo-undone)
     (define-key οεδ-mode-map (kbd "SPC") 'οεδ-mark-todo-done)
     (define-key οεδ-mode-map (kbd "d") 'οεδ-mark-todo-for-delete)
-    (define-key οεδ-mode-map (kbd "u") 'οεδ-unmark-todo-for-delete)
     (define-key οεδ-mode-map (kbd "x") 'οεδ-prompt-execute-delete)
     (define-key οεδ-mode-map (kbd "C-x C-s") 'οεδ-save-buffer)
     (define-key οεδ-mode-map "c" 'οεδ-new-todo))
@@ -42,9 +42,6 @@
     (plist-get x :subtodos))
 (defun todo-disabled-p (x)
     (plist-get x :disabled))
-
-(defun todo-read-callback (todo)
-    (plist-put todo :subtodos (make-dll-from-proper-list-callback (plist-get todo :subtodos) 'todo-read-callback)))
 
 (defun οεδ ()
     (interactive)
@@ -124,6 +121,11 @@
     (interactive)
     (goto-line-at-char (- (line-beginning-position) 1)))
 
+(defun todo-read-callback (todo)
+    (when (plist-get todo :subtodos)
+        (plist-put todo :subtodos (make-dll-from-proper-list-callback (plist-get todo :subtodos) 'todo-read-callback)))
+    todo)
+
 (defun read-buffer-into-todo-list ()
     (let ((old-point (point))
           (done-list nil)
@@ -149,29 +151,26 @@
                 (minibuffer-message error-msg)
                 (sit-for 3)))))
 
+(defun fix-overlays-after-adding-first-undone-todo ()
+    (save-excursion
+        (goto-char (point-min))
+        (move-overlay *undone-items-overlay* 1 (line-end-position))
+        (move-overlay *done-items-overlay* (+ 1 (line-end-position)) (overlay-end *done-items-overlay*))))
+
 (defun οεδ-new-todo ()
     (interactive)
     (let* ((title (read-from-minibuffer "Title: "))
            (new-todo (list :title title :create-date (current-time-string) :complete 'no)))
-        (dll-insert-after *todo-list* new-todo)
+        (dll-add-node-to-list-before *todo-list* *todo-list* (make-dll-node new-todo))
         (goto-char (beginning-of-undone-todos))
         (let ((inhibit-read-only t))
-            (draw-todo new-todo))
+            (draw-todo *todo-list*))
         ;; If this is our only todo, we need to adjust the
         ;; overlays that cover the done and not done areas, so we just
         ;; redraw the whole thing.
-        (when (eq (cdr *todo-list*) nil)
-            (goto-char (point-min))
-            (move-overlay *undone-items-overlay* 1 (line-end-position))
-            (move-overlay *done-items-overlay* (+ 1 (line-end-position)) (overlay-end *done-items-overlay*))))
+        (when (and (null (dll-node-prev *todo-list*)) (null (dll-node-next *todo-list*)))
+            (fix-overlays-after-adding-first-undone-todo)))
     (goto-line-at-char (beginning-of-undone-todos)))
-
-(defun οεδ-delete-todo ()
-    (interactive)
-    (let ((todo-node-at-point (get-char-property (point) 'οεδ-todo-node-prop)))
-        (when todo-node-at-point
-            (plist-put (dll-node-data todo-node-at-point) :disabled t)
-            (dll-remove-node todo-node-at-point))))
 
 (defun οεδ-mark-todo-done ()
     (interactive)
@@ -181,22 +180,53 @@
         (when (and todo-at-point (not (is-yes (plist-get todo-at-point :complete))))
             (save-excursion
                 (plist-put todo-at-point :complete 'yes)
-                (dll-remove-node todo-node-at-point)
-                (dll-insert-node-before *done-list* todo-node-at-point)
+                (dll-remove-node-from-list *todo-list* todo-node-at-point)
+                (dll-add-node-to-list-before *done-list* *done-list* todo-node-at-point)
                 (kill-region (line-beginning-position) (+ 1 (line-end-position)))
                 (goto-char (beginning-of-done-todos))
                 (yank))
             (goto-line-at-char (point))))) ;; just refresh the point
 
-(defvar already-saving nil)
+(defun οεδ-mark-todo-undone ()
+    (interactive)
+    (let* ((todo-node-at-point (get-char-property (point) 'οεδ-todo-node-prop))
+           (todo-at-point (and todo-node-at-point (dll-node-data todo-node-at-point)))
+           (inhibit-read-only t))
+        (when (and todo-at-point (is-yes (plist-get todo-at-point :complete)))
+            (save-excursion
+                (plist-put todo-at-point :complete 'no)
+                (dll-remove-node-from-list *done-list* todo-node-at-point)
+                (dll-add-node-to-list-before *todo-list* *todo-list* todo-node-at-point)
+                (kill-region (line-beginning-position) (+ 1 (line-end-position)))
+                (goto-char (beginning-of-undone-todos))
+                (yank))
+            (when (and (null (dll-node-prev *todo-list*)) (null (dll-node-next *todo-list*)))
+                (fix-overlays-after-adding-first-undone-todo)))))
 
-(defun οεδ-refresh ()
-    (sth))
+(defvar write-todo-disable-newline nil)
 
 (defun write-todo (todo)
     (unless (todo-disabled-p todo)
-        (prin1 todo (current-buffer))
-        (newline)))
+        (princ "(")
+
+        (while todo
+            (if (and (eq (car todo) :subtodos) (not (null (cadr todo))))
+                    (progn
+                        (prin1 :subtodos)
+                        (princ " ")
+                        (let ((write-todo-disable-newline t))
+                            (dll-mapcar (cadr todo) 'write-todo)))
+                (prin1 (car todo))
+                (princ " ")
+                (prin1 (cadr todo))
+                (princ " "))
+            (setf todo (cddr todo)))
+
+        (princ ")")
+        (unless write-todo-disable-newline
+            (newline))))
+
+(defvar already-saving nil)
 
 (defun οεδ-save-buffer ()
     (interactive)
@@ -207,11 +237,13 @@
                       (buf-name (buffer-name))
                       (file-name (buffer-file-name))
                       (todo *todo-list*)
-                      (done *done-list*))
+                      (done *done-list*)
+                      (already-saving t))
                     (set-buffer tmp-buf)
                     (set-visited-file-name file-name t)
-                    (dll-mapcar 'write-todo todo)
-                    (dll-mapcar 'write-todo done)
+                    (let ((standard-output tmp-buf))
+                        (dll-mapcar todo 'write-todo)
+                        (dll-mapcar done 'write-todo))
                     (save-buffer)
                     (set-buffer buf-name)
                     (kill-buffer tmp-buf)
