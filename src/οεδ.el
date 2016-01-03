@@ -38,8 +38,14 @@
     (plist-get x :title))
 (defun todo-complete-p (x)
     (is-yes (plist-get x :complete)))
+(defun set-todo-complete (x complete-p)
+    (if complete-p
+            (plist-put x :complete 'yes)
+        (plist-put x :complete 'no)))
 (defun todo-subtodos (x)
     (plist-get x :subtodos))
+(defun set-todo-subtodos (x subs)
+    (plist-put x :subtodos subs))
 (defun todo-disabled-p (x)
     (plist-get x :disabled))
 
@@ -122,8 +128,8 @@
     (goto-line-at-char (- (line-beginning-position) 1)))
 
 (defun todo-read-callback (todo)
-    (when (plist-get todo :subtodos)
-        (plist-put todo :subtodos (make-dll-from-proper-list-callback (plist-get todo :subtodos) 'todo-read-callback)))
+    (when (todo-subtodos todo)
+        (set-todo-subtodos todo (make-dll-from-proper-list-callback (todo-subtodos todo) 'todo-read-callback)))
     todo)
 
 (defun read-buffer-into-todo-list ()
@@ -177,9 +183,9 @@
     (let* ((todo-node-at-point (get-char-property (point) 'οεδ-todo-node-prop))
            (todo-at-point (and todo-node-at-point (dll-node-data todo-node-at-point)))
            (inhibit-read-only t))
-        (when (and todo-at-point (not (is-yes (plist-get todo-at-point :complete))))
+        (when (and todo-at-point (not (todo-complete-p todo-at-point)))
             (save-excursion
-                (plist-put todo-at-point :complete 'yes)
+                (set-todo-complete todo-at-point t)
                 (dll-remove-node-from-list *todo-list* todo-node-at-point)
                 (dll-add-node-to-list-before *done-list* *done-list* todo-node-at-point)
                 (kill-region (line-beginning-position) (+ 1 (line-end-position)))
@@ -192,9 +198,9 @@
     (let* ((todo-node-at-point (get-char-property (point) 'οεδ-todo-node-prop))
            (todo-at-point (and todo-node-at-point (dll-node-data todo-node-at-point)))
            (inhibit-read-only t))
-        (when (and todo-at-point (is-yes (plist-get todo-at-point :complete)))
+        (when (and todo-at-point (todo-complete-p todo-at-point))
             (save-excursion
-                (plist-put todo-at-point :complete 'no)
+                (set-todo-complete todo-at-point nil)
                 (dll-remove-node-from-list *done-list* todo-node-at-point)
                 (dll-add-node-to-list-before *todo-list* *todo-list* todo-node-at-point)
                 (kill-region (line-beginning-position) (+ 1 (line-end-position)))
