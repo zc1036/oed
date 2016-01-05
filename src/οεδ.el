@@ -21,7 +21,15 @@
        :background "grey20")
       (((class color) (background light))
        :background "grey95"))
-    "Face for the current todo item."
+    "Face for the current todo item's title."
+    :group 'οεδ-faces)
+
+(defface current-item-bg-face
+    '((((class color) (background dark))
+       :background "grey30")
+      (((class color) (background light))
+       :background "grey85"))
+    "Face for the current todo item's background."
     :group 'οεδ-faces)
 
 (defface completed-item-face
@@ -48,6 +56,8 @@
     (plist-put x :subtodos subs))
 (defun todo-disabled-p (x)
     (plist-get x :disabled))
+(defun todo-notes (x)
+    (plist-get x :notes))
 
 (defun οεδ ()
     (interactive)
@@ -58,11 +68,13 @@
         (setq-local *todo-list* (car lists))
         (setq-local *done-list* (cadr lists)))
 
-    (setq-local *current-item-overlay* (make-overlay 0 0))
+    (setq-local *current-item-title-overlay* (make-overlay 0 0))
+    (setq-local *current-item-bg-overlay* (make-overlay 0 0))
     (setq-local *undone-items-overlay* (make-overlay 0 0 (current-buffer) nil t))
     (setq-local *done-items-overlay* (make-overlay 0 0 (current-buffer) nil t))
     
-    (overlay-put *current-item-overlay* 'face 'current-item-face)
+    (overlay-put *current-item-title-overlay* 'face 'current-item-face)
+    (overlay-put *current-item-bg-overlay* 'face 'current-item-bg-face)
     (overlay-put *done-items-overlay* 'face 'completed-item-face)
 
     (add-hook 'write-contents-hooks 'οεδ-save-buffer)
@@ -95,6 +107,14 @@
                   (indent-string (make-string drawtodo-indent-level ?\s)))
                 (insert indent-string)
                 (insert (todo-title todo))
+                (when (todo-notes todo)
+                    (newline)
+                    (let ((notes-begin (point)))
+                        (insert (todo-notes todo))
+                        (fill-region notes-begin (point))
+                        (indent-region notes-begin (point) (1+ drawtodo-indent-level))
+                        ;;(put-text-property notes-begin (point) 'field todo-node)
+                        ))
                 (put-text-property line-start-pos (point) 'οεδ-todo-node-prop todo-node)
                 (newline)
                 (when (todo-subtodos todo)
@@ -116,16 +136,38 @@
 
 (defun goto-line-at-char (line-pos)
     (goto-char line-pos)
-    (goto-char (line-beginning-position))
-    (move-overlay *current-item-overlay* (line-beginning-position) (1+ (line-end-position))))
+    (beginning-of-line)
+    (move-overlay *current-item-bg-overlay* (point) (next-todo-position))
+    (move-overlay *current-item-title-overlay* (point) (1+ (line-end-position)))
+    )
 
 (defun οεδ-next-line ()
     (interactive)
-    (goto-line-at-char (+ (line-end-position) 1)))
+    (let ((next-item-pos (next-single-property-change (point) 'οεδ-todo-node-prop)))
+        (when next-item-pos
+            (goto-line-at-char next-item-pos))))
 
 (defun οεδ-prev-line ()
     (interactive)
-    (goto-line-at-char (- (line-beginning-position) 1)))
+    (let ((prev-item-pos (previous-single-property-change (line-beginning-position) 'οεδ-todo-node-prop)))
+        (if prev-item-pos
+                (goto-line-at-char prev-item-pos)
+            (goto-line-at-char (beginning-of-undone-todos)))))
+
+(defun prev-todo-position ()
+    (save-excursion
+        (οεδ-prev-line)
+        (point)))
+
+(defun next-todo-position ()
+    (save-excursion
+        (οεδ-next-line)
+        (point)))
+
+(defun refresh-eval-buffer ()
+    (interactive)
+    (find-alternate-file (buffer-file-name))
+    (eval-buffer))
 
 (defun todo-read-callback (todo)
     (when (todo-subtodos todo)
@@ -188,7 +230,7 @@
                 (set-todo-complete todo-at-point t)
                 (dll-remove-node-from-list *todo-list* todo-node-at-point)
                 (dll-add-node-to-list-before *done-list* *done-list* todo-node-at-point)
-                (kill-region (line-beginning-position) (+ 1 (line-end-position)))
+                (kill-region (line-beginning-position) (next-todo-position))
                 (goto-char (beginning-of-done-todos))
                 (yank))
             (goto-line-at-char (point))))) ;; just refresh the point
@@ -207,7 +249,8 @@
                 (goto-char (beginning-of-undone-todos))
                 (yank))
             (when (and (null (dll-node-prev *todo-list*)) (null (dll-node-next *todo-list*)))
-                (fix-overlays-after-adding-first-undone-todo)))))
+                (fix-overlays-after-adding-first-undone-todo))
+            (goto-line-at-char (point)))))
 
 (defvar write-todo-disable-newline nil)
 
